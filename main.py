@@ -1,23 +1,28 @@
 import cv2
 import numpy as np
-
 import requests
 
-'''
-INFO SECTION
-- if you want to monitor raw parameters of ESP32CAM, open the browser and go to http://192.168.x.x/status
-- command can be sent through an HTTP get composed in the following way http://192.168.x.x/control?var=VARIABLE_NAME&val=VALUE (check varname and value in status)
-'''
-
 # ESP32 URL
-URL = "insert here the Esp-cam URL, eg. http://192.168.1.1"
+URL = "http://172.20.10.9"
 AWB = True
 
-# Face recognition and opencv setup
-cap = cv2.VideoCapture(URL + ":81/stream")
-face_classifier = cv2.CascadeClassifier('haarcascade_frontalface_alt.xml') # insert the full path to haarcascade file if you encounter any problem
+# Load pre-trained object detection model
+net = cv2.dnn_DetectionModel("frozen_inference_graph.pb", "ssd_mobilenet_v3_large_coco_2020_01_14.pbtxt")
+net.setInputSize(320, 320)
+net.setInputScale(1.0 / 127.5)
+net.setInputMean((127.5, 127.5, 127.5))
+net.setInputSwapRB(True)
 
-def set_resolution(url: str, index: int=1, verbose: bool=False):
+# Load COCO class names
+classNames = []
+with open("coco.names", "r") as f:
+    classNames = f.read().rstrip("\n").split("\n")
+
+# ESP32 Camera setup
+cap = cv2.VideoCapture(URL + ":81/stream")
+
+# Functions for ESP32 settings
+def set_resolution(url: str, index: int = 1, verbose: bool = False):
     try:
         if verbose:
             resolutions = "10: UXGA(1600x1200)\n9: SXGA(1280x1024)\n8: XGA(1024x768)\n7: SVGA(800x600)\n6: VGA(640x480)\n5: CIF(400x296)\n4: QVGA(320x240)\n3: HQVGA(240x176)\n0: QQVGA(160x120)"
@@ -30,14 +35,14 @@ def set_resolution(url: str, index: int=1, verbose: bool=False):
     except:
         print("SET_RESOLUTION: something went wrong")
 
-def set_quality(url: str, value: int=1, verbose: bool=False):
+def set_quality(url: str, value: int = 1, verbose: bool = False):
     try:
-        if value >= 10 and value <=63:
+        if value >= 10 and value <= 63:
             requests.get(url + "/control?var=quality&val={}".format(value))
     except:
         print("SET_QUALITY: something went wrong")
 
-def set_awb(url: str, awb: int=1):
+def set_awb(url: str, awb: int = 1):
     try:
         awb = not awb
         requests.get(url + "/control?var=awb&val={}".format(1 if awb else 0))
@@ -53,13 +58,15 @@ if __name__ == '__main__':
             ret, frame = cap.read()
 
             if ret:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                gray = cv2.equalizeHist(gray)
+                # Detect objects
+                classIds, confs, bbox = net.detect(frame, confThreshold=0.5)
 
-                faces = face_classifier.detectMultiScale(gray)
-                for (x, y, w, h) in faces:
-                    center = (x + w//2, y + h//2)
-                    frame = cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 255, 0), 4)
+                # Draw bounding boxes for detected objects
+                if len(classIds) != 0:
+                    for classId, confidence, box in zip(classIds.flatten(), confs.flatten(), bbox):
+                        cv2.rectangle(frame, box, color=(0, 255, 0), thickness=2)
+                        cv2.putText(frame, classNames[classId - 1], (box[0], box[1] - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
 
             cv2.imshow("frame", frame)
 
@@ -76,9 +83,8 @@ if __name__ == '__main__':
             elif key == ord('a'):
                 AWB = set_awb(URL, AWB)
 
-            elif key == 27:
+            elif key == 27:  # ESC key to exit
                 break
 
     cv2.destroyAllWindows()
     cap.release()
-
